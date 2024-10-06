@@ -11,7 +11,7 @@ Multimodal large language models (MLLMs) have been explored in the Chinese medic
 ## Training
 
 ```
-sh /home/xdingaf/code/HiA/scripts
+sh scripts/finetune.sh
 ```
 
 ## Acknowledgement
