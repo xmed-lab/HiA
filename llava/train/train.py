@@ -20,18 +20,34 @@ from dataclasses import dataclass, field
 import json
 import logging
 import pathlib
+import random
 from typing import Dict, Optional, Sequence, List
-
+from torch.utils.data import DataLoader
 import torch
+import sys
+import numpy as np
 
+# print(sys.path)
+cur_path = os.path.abspath(os.path.dirname(__file__))
+root_path = cur_path[:cur_path.find('HiA')] + 'HiA'
+# print(root_path)
+# ssss
+sys.path.append(root_path)
 import transformers
-
+# asdasd
 from llava.constants import IGNORE_INDEX, IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 from torch.utils.data import Dataset
 from llava.train.llava_trainer import LLaVATrainer
 
 from llava import conversation as conversation_lib
-from llava.model import *
+# from llava.model import *
+# from llava.model import *
+from llava.model.language_model.llava_hia import LlavaLlamaForCausalLM 
+# from llava.model.language_model.llava_llama_tokenizer import LlavaLlamaTokenizerForCausalLM 
+from llava.model.blip_processors import BlipImageBaseProcessor
+
+# from llava.model.language_model.llava_mpt import LlavaMPTForCausalLM 
+
 from llava.mm_utils import tokenizer_image_token
 
 from PIL import Image
@@ -58,7 +74,15 @@ class ModelArguments:
     mm_use_im_start_end: bool = field(default=False)
     mm_use_im_patch_token: bool = field(default=True)
     mm_vision_select_feature: Optional[str] = field(default="patch")
-
+    modelmixup: bool = field(default=False)
+   
+    steam: Optional[str] = field(default=None)
+    hr_size: Optional[int] = field(default=224)   # default to the last layer
+    mm_patch_merge_type: Optional[str] = field(default="unpad")
+   
+    interact: Optional[str] = field(default='attention')
+    num_query_tokens: Optional[str] = field(default=None)
+    # hr_crop_size: Optional[int] = field(default=224)
 
 @dataclass
 class DataArguments:
@@ -68,8 +92,8 @@ class DataArguments:
     is_multimodal: bool = False
     image_folder: Optional[str] = field(default=None)
     image_aspect_ratio: str = 'square'
-    image_grid_pinpoints: Optional[str] = field(default=None)
-
+    visual_id_folder: Optional[str] = field(default=None)
+    hr_crop_size:  Optional[int] = field(default=224)
 
 @dataclass
 class TrainingArguments(transformers.TrainingArguments):
@@ -98,12 +122,19 @@ class TrainingArguments(transformers.TrainingArguments):
         metadata={"help": "How many bits to use."}
     )
     lora_enable: bool = False
+
+    layernorm: bool = False
     lora_r: int = 64
     lora_alpha: int = 16
     lora_dropout: float = 0.05
     lora_weight_path: str = ""
     lora_bias: str = "none"
+    mm_projector_lr: Optional[float] = None
     group_by_modality_length: bool = field(default=False)
+    mixup: bool = False
+    tokenizer_path: Optional[str] = field(default=None)
+    visual_weight: Optional[float] = field(default=1.0)
+    steam_path: Optional[str] = field(default=None)
 
 
 def maybe_zero_3(param, ignore_status=False, name=None):
@@ -240,6 +271,18 @@ def smart_tokenizer_and_embedding_resize(
         output_embeddings[-num_new_tokens:] = output_embeddings_avg
 
 
+def resize_lm_head(
+    model: transformers.PreTrainedModel,
+):
+    """Resize tokenizer and embedding.
+
+    Note: This is the unoptimized version that may make your embedding size not be divisible by 64.
+    """
+    old_lm_head = model.get_output_embeddings()
+ 
+    new_lm_head = model._get_resized_lm_head(old_lm_head, model.vocab_size+model.visual_vocab_size+2)
+    model.set_output_embeddings(new_lm_head)
+
 def _tokenize_fn(strings: Sequence[str],
                  tokenizer: transformers.PreTrainedTokenizer) -> Dict:
     """Tokenize a list of strings."""
@@ -346,7 +389,8 @@ def preprocess_llama_2(
         conversations.append(conv.get_prompt())
 
     # Tokenize conversations
-
+    for prompt in conversations:
+        print(prompt)
     if has_image:
         input_ids = torch.stack([tokenizer_image_token(prompt, tokenizer, return_tensors='pt') for prompt in conversations], dim=0)
     else:
@@ -439,9 +483,9 @@ def preprocess_v1(
             max_length=tokenizer.model_max_length,
             truncation=True,
         ).input_ids
-
+  
     targets = input_ids.clone()
-
+    
     assert conv.sep_style == conversation_lib.SeparatorStyle.TWO
 
     # Mask targets
@@ -480,7 +524,7 @@ def preprocess_v1(
                     f"WARNING: tokenization mismatch: {cur_len} vs. {total_len}."
                     f" (ignored)"
                 )
-
+  
     return dict(
         input_ids=input_ids,
         labels=targets,
@@ -588,16 +632,21 @@ def preprocess(
     4. Make a deepcopy as the target. Mask human words with IGNORE_INDEX.
     """
     if conversation_lib.default_conversation.sep_style == conversation_lib.SeparatorStyle.PLAIN:
+        # print('1')
         return preprocess_plain(sources, tokenizer)
     if conversation_lib.default_conversation.sep_style == conversation_lib.SeparatorStyle.LLAMA_2:
+        # print('2')
         return preprocess_llama_2(sources, tokenizer, has_image=has_image)
     if conversation_lib.default_conversation.version.startswith("v1"):
+        # print('3')
         return preprocess_v1(sources, tokenizer, has_image=has_image)
     if conversation_lib.default_conversation.version == "mpt":
+        # print('4')
         return preprocess_mpt(sources, tokenizer)
     # add end signal and concatenate together
     conversations = []
     for source in sources:
+        
         header = f"{conversation_lib.default_conversation.system}\n\n"
         conversation = _add_speaker_and_signal(header, source)
         conversations.append(conversation)
@@ -618,6 +667,7 @@ def preprocess(
         else:
             tokenized_lens = _tokenize_fn([header] + [s["value"] for s in source], tokenizer)["input_ids_lens"]
         speakers = [sentence["from"] for sentence in source]
+        # print(speakers)
         _mask_targets(target, tokenized_lens, speakers)
 
     return dict(input_ids=input_ids, labels=targets)
@@ -631,14 +681,22 @@ class LazySupervisedDataset(Dataset):
                  data_args: DataArguments):
         super(LazySupervisedDataset, self).__init__()
         list_data_dict = json.load(open(data_path, "r"))
-
+       
         rank0_print("Formatting inputs...Skip in lazy mode")
         self.tokenizer = tokenizer
-        self.list_data_dict = list_data_dict
         self.data_args = data_args
+     
+        self.list_data_dict  = list_data_dict 
+        self.hr_processor = BlipImageBaseProcessor(image_size = data_args.hr_crop_size)
+        self.processor = self.data_args.image_processor
+       
+  
 
     def __len__(self):
         return len(self.list_data_dict)
+  
+
+
 
     @property
     def lengths(self):
@@ -656,54 +714,117 @@ class LazySupervisedDataset(Dataset):
             cur_len = cur_len if 'image' in sample else -cur_len
             length_list.append(cur_len)
         return length_list
-
+    
+    # def _obtain_images(self,image_file):
+        
     def __getitem__(self, i) -> Dict[str, torch.Tensor]:
         sources = self.list_data_dict[i]
         if isinstance(i, int):
             sources = [sources]
         assert len(sources) == 1, "Don't know why it is wrapped to a list"  # FIXME
+        # for source in sources:
+        #     print(source)
+        #     sss
+        # Flag = False
+        
+        # print(Flag)
+        image_folder = self.data_args.image_folder
         if 'image' in sources[0]:
-            image_file = self.list_data_dict[i]['image']
-            image_folder = self.data_args.image_folder
-            processor = self.data_args.image_processor
-            image = Image.open(os.path.join(image_folder, image_file)).convert('RGB')
-            if self.data_args.image_aspect_ratio == 'pad':
-                def expand2square(pil_img, background_color):
-                    width, height = pil_img.size
-                    if width == height:
-                        return pil_img
-                    elif width > height:
-                        result = Image.new(pil_img.mode, (width, width), background_color)
-                        result.paste(pil_img, (0, (width - height) // 2))
-                        return result
+           
+            image_files = self.list_data_dict[i]['image']
+            image_files = [image_files,image_files]
+            if type(image_files) is list:            
+                image_list = []
+                hr_image_list = []
+                
+                for image_file in image_files:
+                    image = np.zeros((336,336,3))
+                    image = Image.fromarray(image.astype('uint8')).convert('RGB')
+                    
+                    # try:
+                    #     image = Image.open(os.path.join(image_folder, image_file)).convert('RGB')
+                       
+                    # except Exception as e:
+                    #     # print(e)
+                    #     image = Image.new('RGB', (336, 336), (255, 255, 255))
+                    #     image = np.zeros((336,336,3))
+                    #     image = Image.fromarray(image.astype('uint8')).convert('RGB')
+                    
+                
+                  
+                    if self.data_args.hr_crop_size > 224:
+                        hr_image =  self.hr_processor(image)
+                    
+                        # print(hr_image.shape)
+                    if self.data_args.image_aspect_ratio == 'pad':
+                        def expand2square(pil_img, background_color):
+                            width, height = pil_img.size
+                            if width == height:
+                                return pil_img
+                            elif width > height:
+                                result = Image.new(pil_img.mode, (width, width), background_color)
+                                result.paste(pil_img, (0, (width - height) // 2))
+                                return result
+                            else:
+                                result = Image.new(pil_img.mode, (height, height), background_color)
+                                result.paste(pil_img, ((height - width) // 2, 0))
+                                return result
+                        image = expand2square(image, tuple(int(x*255) for x in self.processor.image_mean))
+                        image = self.processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+                        
+                        # hr_image =  self.hr_processor(image)
                     else:
-                        result = Image.new(pil_img.mode, (height, height), background_color)
-                        result.paste(pil_img, ((height - width) // 2, 0))
-                        return result
-                image = expand2square(image, tuple(int(x*255) for x in processor.image_mean))
-                image = processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-            else:
-                image = processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+                        image = self.processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+                    # print(image.shape)
+                    # sss
+                    image_list.append(image)
+                    hr_image_list.append(hr_image)
+            image = image_list[:2]
+            image = torch.stack(image, dim=0)
+
+            hr_image = hr_image_list[:2]
+            hr_image = torch.stack(hr_image, dim=0)
+
+
             sources = preprocess_multimodal(
                 copy.deepcopy([e["conversations"] for e in sources]),
                 self.data_args)
+            # print(sources)
+            # ssss
         else:
             sources = copy.deepcopy([e["conversations"] for e in sources])
+
+        
         data_dict = preprocess(
             sources,
             self.tokenizer,
             has_image=('image' in self.list_data_dict[i]))
+        
         if isinstance(i, int):
             data_dict = dict(input_ids=data_dict["input_ids"][0],
                              labels=data_dict["labels"][0])
-
+        
+        # print(self.data_args.is_multimodal)
+        # ssss
         # image exist in the data
         if 'image' in self.list_data_dict[i]:
+            # print(self.data_args.hr_crop_size)
+           
+            # print(hr_image.shape)
+            # ssss
+            if self.data_args.hr_crop_size > 224:
+                data_dict['hr_image'] = hr_image
             data_dict['image'] = image
-        elif self.data_args.is_multimodal:
+        
+        else:
+           
             # image does not exist in the data, but the model is multimodal
             crop_size = self.data_args.image_processor.crop_size
             data_dict['image'] = torch.zeros(3, crop_size['height'], crop_size['width'])
+            if  self.data_args.hr_crop_size > 224:
+                data_dict['hr_image'] = torch.zeros(3, self.data_args.hr_crop_size, self.data_args.hr_crop_size)
+           
+           
         return data_dict
 
 
@@ -714,8 +835,10 @@ class DataCollatorForSupervisedDataset(object):
     tokenizer: transformers.PreTrainedTokenizer
 
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
+      
         input_ids, labels = tuple([instance[key] for instance in instances]
                                   for key in ("input_ids", "labels"))
+       
         input_ids = torch.nn.utils.rnn.pad_sequence(
             input_ids,
             batch_first=True,
@@ -732,12 +855,21 @@ class DataCollatorForSupervisedDataset(object):
         )
 
         if 'image' in instances[0]:
+            
             images = [instance['image'] for instance in instances]
-            if all(x is not None and x.shape == images[0].shape for x in images):
-                batch['images'] = torch.stack(images)
-            else:
-                batch['images'] = images
+            
+            if 'hr_image' in instances[0]:
+                hr_images = [instance['hr_image'] for instance in instances]
+         
+           
+            images = [im_list for im_list in images]
 
+            hr_images = [im_list for im_list in hr_images]
+            batch["images"] = images
+            batch["hr_images"] = hr_images
+            
+           
+           
         return batch
 
 
@@ -772,6 +904,7 @@ def train():
             quantization_config=BitsAndBytesConfig(
                 load_in_4bit=training_args.bits == 4,
                 load_in_8bit=training_args.bits == 8,
+                llm_int8_skip_modules=["mm_projector"],
                 llm_int8_threshold=6.0,
                 llm_int8_has_fp16_weight=False,
                 bnb_4bit_compute_dtype=compute_dtype,
@@ -779,7 +912,7 @@ def train():
                 bnb_4bit_quant_type=training_args.quant_type # {'fp4', 'nf4'}
             )
         ))
-
+  
     if model_args.vision_tower is not None:
         if 'mpt' in model_args.model_name_or_path:
             config = transformers.AutoConfig.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
@@ -791,19 +924,38 @@ def train():
                 **bnb_model_from_pretrained_args
             )
         else:
+            # if training_args.mixup:
+            config = transformers.AutoConfig.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
+            
+            config.hr_size = data_args.hr_crop_size
+           
+            config.visual_tokenizer = training_args.tokenizer_path
+            config.v_weight = training_args.visual_weight
+            config.steam_path = training_args.steam_path
+            config.interact = model_args.interact
+            config.num_query_tokens = model_args.num_query_tokens
+          
+           
             model = LlavaLlamaForCausalLM.from_pretrained(
-                model_args.model_name_or_path,
-                cache_dir=training_args.cache_dir,
-                **bnb_model_from_pretrained_args
-            )
+                    model_args.model_name_or_path,
+                    cache_dir=training_args.cache_dir,
+                    config=config,
+                    **bnb_model_from_pretrained_args
+                )
+           
+
+          
     else:
         model = transformers.LlamaForCausalLM.from_pretrained(
             model_args.model_name_or_path,
             cache_dir=training_args.cache_dir,
-            **bnb_model_from_pretrained_args
+            **bnb_model_from_pretrained_args,
         )
     model.config.use_cache = False
-
+    
+  
+          
+           
     if model_args.freeze_backbone:
         model.model.requires_grad_(False)
 
@@ -820,6 +972,7 @@ def train():
                 output.requires_grad_(True)
             model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
 
+   
     if training_args.lora_enable:
         from peft import LoraConfig, get_peft_model
         lora_config = LoraConfig(
@@ -880,11 +1033,13 @@ def train():
         vision_tower.to(dtype=torch.bfloat16 if training_args.bf16 else torch.float16, device=training_args.device)
 
         data_args.image_processor = vision_tower.image_processor
+     
         data_args.is_multimodal = True
 
         model.config.image_aspect_ratio = data_args.image_aspect_ratio
-        model.config.image_grid_pinpoints = data_args.image_grid_pinpoints
-
+        model.config.tokenizer_padding_side = tokenizer.padding_side
+        model.config.tokenizer_model_max_length = tokenizer.model_max_length
+        
         model.config.tune_mm_mlp_adapter = training_args.tune_mm_mlp_adapter = model_args.tune_mm_mlp_adapter
         if model_args.tune_mm_mlp_adapter:
             model.requires_grad_(False)
@@ -900,6 +1055,7 @@ def train():
             model.get_model().mm_projector.to(dtype=compute_dtype, device=training_args.device)
 
         model.config.mm_use_im_start_end = data_args.mm_use_im_start_end = model_args.mm_use_im_start_end
+        model.config.mm_projector_lr = training_args.mm_projector_lr
         training_args.use_im_start_end = model_args.mm_use_im_start_end
         model.config.mm_use_im_patch_token = model_args.mm_use_im_patch_token
         model.initialize_vision_tokenizer(model_args, tokenizer=tokenizer)
@@ -919,19 +1075,39 @@ def train():
 
     data_module = make_supervised_data_module(tokenizer=tokenizer,
                                               data_args=data_args)
+  
+
+
+   
+    if training_args.steam_path is not None:
+        
+        for name,param in model.named_parameters():
+           
+            if 'spm' in name or 'gate_Con' in name:
+            
+                param.requires_grad = True
+   
     trainer = LLaVATrainer(model=model,
                     tokenizer=tokenizer,
                     args=training_args,
                     **data_module)
-
+   
+    for name,param in model.get_model().named_parameters():
+        # print(name, param)
+        if param.requires_grad:
+                print(name)
+   
+   
     if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):
         trainer.train(resume_from_checkpoint=True)
+        
     else:
         trainer.train()
+       
     trainer.save_state()
 
     model.config.use_cache = True
-
+  
     if training_args.lora_enable:
         state_dict = get_peft_state_maybe_zero_3(
             model.named_parameters(), training_args.lora_bias
@@ -939,10 +1115,13 @@ def train():
         non_lora_state_dict = get_peft_state_non_lora_maybe_zero_3(
             model.named_parameters()
         )
+       
         if training_args.local_rank == 0 or training_args.local_rank == -1:
             model.config.save_pretrained(training_args.output_dir)
             model.save_pretrained(training_args.output_dir, state_dict=state_dict)
+           
             torch.save(non_lora_state_dict, os.path.join(training_args.output_dir, 'non_lora_trainables.bin'))
+            print('saved')
     else:
         safe_save_model_for_hf_trainer(trainer=trainer,
                                        output_dir=training_args.output_dir)

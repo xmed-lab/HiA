@@ -1,76 +1,16 @@
-# Qilin-Med-VL: Towards Chinese Large Vision-Language Model for General Healthcare
+# HiA: Towards Chinese Multimodal LLMs for Comparative High-Resolution Joint Diagnosis
 
-> Junling Liu, Ziming Wang, Qichen Ye, Dading Chong, Peilin Zhou, Yining Hua
+> Xinpeng Ding, Yongqiang Chu, Renjie Pi, Hualiang Wang, Xiaomeng Li
 
 ## 📖 Introduction
-Large Language Models (LLMs) have introduced a new era of proficiency in comprehending complex healthcare and biomedical topics. However, there is a noticeable lack of models in languages other than English and models that can interpret multi-modal input, which is crucial for global healthcare accessibility. In response, this study introduces Qilin-Med-VL 1 , the first Chinese large vision-language model designed to integrate the analysis of textual and visual data. Qilin-Med-VL combines a pre-trained Vision Transformer (ViT) with a foundational LLM. It undergoes a thorough two-stage curriculum training process that includes feature alignment and instruction tuning. This method enhances the model's ability to generate medical captions and answer complex medical queries. We also release ChiMed-VL, a dataset consisting of more than 1M image-text pairs. This dataset has been carefully curated to enable detailed and comprehensive interpretation of medical data using various types of images.
 
-![overview](docs/flowchart.png)
+Multimodal large language models (MLLMs) have been explored in the Chinese medical domain for comprehending complex healthcare. However, due to the flaws in training data and architecture design, current Chinese medical MLLMs suffer from several limitations: cultural biases from English machine translations, limited comparative ability from single image input and difficulty in identifying small lesions with low-resolution images. To address these problems, we first introduce a new instruction-following dataset, Chili-Joint (Chinese Interleaved Image-Text Dataset for Joint Diagnosis) collected from the hospital in mainland China, avoiding cultural biases and errors caused by machine translation. Besides one single image input, Chili-Joint also has multple images obtained at various intervals during a patient’s treatment, thus facilitating an evaluation of the treatment’s outcomes. We further propose a novel HiA (High-resolution instruction-aware Adapter) to incorporate high-resolutioninstruction-aware visual features into LLMs to facilitate the current MLLMs to observe the small lesions as well as the comparative analysis. Extensive experiments on Chili-Joint demonstrate our HiA can be a plug-and-play method to improve the performance of current MLLMs for medical analysis.
 
+![overview](docs/framework.png)
 
-## ✅ Todo
+## Training
 
-- [x] training scripts
-- [x] training data
-- [x] models
-    - [x] base model
-    - [x] chat model
-- [ ] downstream task validation
-
-## 📚 Datasets
-
-Chinese Medicine - Vision Language Dataset (ChiMed-VL), the first large-scale Chinese Vision-Language dataset for general healthcare, designed to facilitate multistage training. This dataset has two subsets: vision-language feature alignment and instruction tuning.
-
-### ChiMed-VL-Alignment dataset
-ChiMed-VL-Alignment consists of 580,014 image-text couplings, each pair falling into one of two categories: context information of an image or descriptions of an image. The context category contains 167M tokens, presenting a median text length of 435 (Q1: 211, Q3: 757). Conversely, descriptions, more concise and image-specific, contain inline descriptions and captions. They comprise 63M tokens, with median lengths settling at 59 (Q1: 45, Q3: 83).
-
-### ChiMed-VL-Instruction dataset
-ChiMed-VL-Instruction comprises 469,441 question-answer pairs. Within this subset, the questions section contains 10M tokens with a median length of 20 (Q1: 16, Q3: 25), posing a concise inquiry reflective of medical queries. The answers consist of 13M tokens with a median length slightly longer at 22 (Q1: 12, Q3: 34), providing clear, direct, and informative responses.
-
-### ChiMed-VL-Chat dataset
-TODO
-
-### Data Acquire
-Our prompt data is provided on HuggingFace and Baidu Yun.
-
-- HuggingFace: https://huggingface.co/datasets/williamliu/ChiMed-VL
-
-- Baidu Yun: https://pan.baidu.com/s/1TBwdKLZbaYIxZy_DLMZrXQ 提取码: fkma
-
-## 👨‍ Models
-
-### Model Access
-We have open-sourced the weights of the Qilin-Med-VL model, which can be downloaded through the following link.
-
-#### Base-Version
-- HuggingFace: https://huggingface.co/williamliu/Qilin-Med-VL
-
-- Baidu Yun: https://pan.baidu.com/s/1lZs53EWb9kOtsIN5BB34Jw 提取码: muab 
-
-#### Chat-Version
-- HuggingFace: https://huggingface.co/williamliu/Qilin-Med-VL-Chat
-
-
-## Demo
-
-You could interact with the Qilin-Med-VL using the following commands:
-```
-python -m llava.serve.cli \
-    --model-path williamliu/Qilin-Med-VL-Chat \
-    --image-file "playground/figures/PMC8253873_Fig6_46.jpg" \
-    --load-4bit
-```
-![overview](docs/demo.gif)
-
-## Cite Us
-```
-@inproceedings{Liu2023QilinMedVLTC,
-  title={Qilin-Med-VL: Towards Chinese Large Vision-Language Model for General Healthcare},
-  author={Junling Liu and Ziming Wang and Qichen Ye and Dading Chong and Peilin Zhou and Yining Hua},
-  year={2023},
-  url={https://arxiv.org/abs/2310.17956}
-}
-```
+- [ ] training data
 
 ## Acknowledgement
 
@@ -78,3 +18,4 @@ Many thanks to the following awesome works!
 
 - [LLaVA](https://github.com/haotian-liu/LLaVA)
 - [Transformers](https://github.com/huggingface/transformers)
+- [Qilin-Med-VL](https://github.com/williamliujl/Qilin-Med-VL/)

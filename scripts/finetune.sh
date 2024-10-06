@@ -1,24 +1,28 @@
 #!/bin/bash
 
-deepspeed llava/train/train_mem.py \
+deepspeed llava/train/train.py \
     --deepspeed ./scripts/zero3.json \
     --model_name_or_path FlagAlpha/Llama2-Chinese-13b-Chat \
     --version v1 \
-    --data_path ./data/ChiMed-VL-Instruction/stage2_data.json \
-    --image_folder ./data/ChiMed-VL-Instruction/images \
-    --vision_tower openai/clip-vit-large-patch14-336 \
-    --pretrain_mm_mlp_adapter ./checkpoints/Qilin-Med-VL-pretrain/mm_projector.bin \
+    --data_path ./dataset/interleave.json \
+    --image_folder ./data/-Instruction/images \
+    --vision_tower .cache/huggingface/hub/openai-clip-vit-large-patch14-336 \
+    --steam_path .cache/models/resnet50-0676ba61.pth \
+    --hr_crop_size 448 \
+    --pretrain_mm_mlp_adapter ./checkpoint/mm_projector.bin \
     --mm_projector_type mlp2x_gelu \
     --mm_vision_select_layer -2 \
     --mm_use_im_start_end False \
     --mm_use_im_patch_token False \
     --image_aspect_ratio pad \
+    --mm_patch_merge_type unpad \
     --bf16 True \
-    --output_dir ./checkpoints/Qilin-Med-VL \
+    --output_dir ./checkpoints/HiA \
     --num_train_epochs 1 \
-    --per_device_train_batch_size 16 \
+    --num_query_tokens '[13,26]'  \
+    --per_device_train_batch_size 2 \
     --per_device_eval_batch_size 4 \
-    --gradient_accumulation_steps 1 \
+    --gradient_accumulation_steps 4 \
     --evaluation_strategy "no" \
     --save_strategy "steps" \
     --save_steps 10000 \
@@ -33,4 +37,5 @@ deepspeed llava/train/train_mem.py \
     --gradient_checkpointing True \
     --dataloader_num_workers 4 \
     --lazy_preprocess True \
-    --report_to wandb
+    --report_to none \
+    --freeze_backbone False \
