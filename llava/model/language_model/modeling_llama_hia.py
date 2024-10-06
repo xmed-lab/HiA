@@ -543,10 +543,10 @@ class Con(nn.Module):
         new_line = hidden_states[:,middle,:]
         post_ori_hidden_states = hidden_states[:,middle+1+low_vision_len:,]
        
-        # print('after_{}_{}_{}_{}_{}'.format(prior_ori_hidden_states.shape,new_first_vision_hidden_states.shape,new_line.shape, new_second_vision_hidden_states.shape,post_ori_hidden_states.shape))
+      
         new_hidden_states = torch.cat([prior_ori_hidden_states,new_first_vision_hidden_states,new_line.unsqueeze(dim=1), new_second_vision_hidden_states,post_ori_hidden_states],dim=1)
 
-        # print('sss_{}'.format(new_hidden_states.shape))
+       
         return new_hidden_states
       
        
